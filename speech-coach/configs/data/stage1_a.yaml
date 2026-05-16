@@ -1,0 +1,5 @@
+# Stage 1-A: D1 KsponSpeech only (설계서 §6.1)
+dataset: d1_kspon
+manifest: data/manifests/d1_train.jsonl
+val_manifest: data/manifests/d1_val.jsonl
+sample_rate: 16000

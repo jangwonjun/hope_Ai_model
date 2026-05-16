@@ -1,0 +1,1 @@
+{"utt_id": "example_001", "audio_path": "data/d1_kspon/audio/example.wav", "speaker_id": "spk_001", "speaker_meta": {"age_group": "adult", "sex": "F"}, "target_word": "사과", "target_phonemes": ["s", "a", "k", "w", "a"], "data_source": "kspon", "duration_s": 1.84, "snr_db": 32.5}

@@ -1,0 +1,5 @@
+# Stage 1-B: D1 60% + D2 40%
+mix:
+  d1_weight: 0.6
+  d2_weight: 0.4
+sample_rate: 16000

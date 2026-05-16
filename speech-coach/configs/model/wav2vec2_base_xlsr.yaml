@@ -1,0 +1,5 @@
+# Wav2Vec2-XLSR-base + CTC (설계서 §5.1)
+model_name: facebook/wav2vec2-xls-r-300m
+# 학부 환경에서는 base 계열로 교체 가능 — 실제 학습 시 허브 모델명 조정
+hidden_dropout: 0.1
+activation_dropout: 0.0

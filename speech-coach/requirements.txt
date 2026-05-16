@@ -1,0 +1,16 @@
+# Core (matches pyproject)
+numpy>=1.24
+torch>=2.1
+torchaudio>=2.1
+transformers>=4.36
+accelerate>=1.1.0
+fastapi>=0.109
+uvicorn[standard]>=0.27
+python-multipart>=0.0.6
+pydantic>=2.5
+soundfile>=0.12
+# Dev
+httpx>=0.26
+pytest>=7.4
+# Optional: 설계서 Module A++ — 로컬에 설치 어려우면 제거 가능
+# opensmile-python>=2.5

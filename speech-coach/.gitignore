@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+checkpoints/
+wandb/
+*.wav
+!tests/fixtures/**/*.wav
+.DS_Store
+data/d1_kspon/raw/
+data/d2_aihub_kid_266/raw/

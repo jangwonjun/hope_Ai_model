@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speech-coach"
+version = "0.1.0"
+description = "HOPE 한국어 조음 교정 AI 엔진 (설계서 v0.8 골격)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "torch>=2.1",
+  "torchaudio>=2.1",
+  "transformers>=4.36",
+  "accelerate>=1.1.0",
+  "fastapi>=0.109",
+  "uvicorn[standard]>=0.27",
+  "python-multipart>=0.0.6",
+  "pydantic>=2.5",
+  "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "httpx>=0.26", "ruff>=0.2"]
+opensmile = ["opensmile-python>=2.5"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

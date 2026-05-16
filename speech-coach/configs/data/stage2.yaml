@@ -1,0 +1,6 @@
+# Stage 2: D1 50% + D2 50% + aug (설계서 §6.1)
+mix:
+  d1_weight: 0.5
+  d2_weight: 0.5
+augment: true
+sample_rate: 16000

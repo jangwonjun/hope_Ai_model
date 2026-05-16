@@ -1,0 +1,28 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# 모델 가중치·대용량 체크포인트 (Git에 올리지 말 것 — HF Hub / Git LFS / 사내 스토리지)
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+outputs/
+wandb/
+.huggingface/
+
+# 로그·캐시
+*.log
+.cache/

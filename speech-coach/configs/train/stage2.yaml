@@ -1,0 +1,7 @@
+epochs: 10
+lr: 3.0e-5
+warmup_ratio: 0.1
+per_device_batch: 16
+grad_accum: 2
+bf16: true
+gradient_checkpointing: true

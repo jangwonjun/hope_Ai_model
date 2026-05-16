@@ -1,0 +1,1017 @@
+AI 개발 설계서 v0.8
+한국어 발음 학습 보조 AI Prototype
+8~12세 아동 대상 한국어 조음 교정 앱
+정융 고능팀 · 광운대학교 정보융합학부
+Document v0.8
+2026. 05.
+AI 엔진 개발 담당: 이주석
+본 문서는 v0.3 설계서를 학부 환경(4인 / 10주 / RTX 4080 / 예산 15만 원 / SLP 자문 0건)에 맞춰 재설계한 v0.8 정식 설계서이다.
+범위: 시스템 아키텍처 · 데이터 전략 · 모델 설계 · 학습 전략 · 평가 · 코드 구조 · 리스크
+비범위: 모바일 앱 UI 디자인 · 백엔드 비즈니스 로직 · 임상 검증(HOPE Research 후속 분리) · LLM 피드백(후속 분리)
+
+목차
+1. Executive Summary
+2. 시스템 정체성 및 본질 정의
+3. 시스템 아키텍처
+4. 데이터 전략
+5. 모델 설계
+6. 학습 전략
+7. 평가 계획
+8. 구현: 디렉토리 구조 및 코드 골격
+9. 일정 (10주)
+10. 리스크 레지스터
+11. v0.3 대비 주요 변경 요약
+12. 후속 과제 (HOPE Research)
+
+1. Executive Summary
+1.1 무엇을 만드는가
+8~12세 한국어 사용 아동의 발화를 입력받아 (1) 발화된 음소 시퀀스를 추출하고, (2) 목표 발화와 정렬하여 음소 단위 정/오를 판정하며, (3) 음향학적 deviation을 측정하여 정도(degree)를 표현하고, (4) PCC(자음정확도)를 산출하여 게임형 인터페이스로 피드백하는 모바일·서버 통합 AI 시스템.
+1.2 시스템 정체성
+본 시스템은 임상 진단 도구가 아니라 "한국어 음소를 정확히 듣는 AI 청자(listener)"이다. 사용자가 어떻게 발음하든 들리는 음향대로 음소를 출력하고, 목표 음소와 비교해 차이를 알려준다. 조음음운장애 아동의 미발음 데이터를 학습할 필요가 없으며, 정상 발화 데이터로만 학습한다.
+1.3 핵심 설계 결정 (TL;DR)
+	•	ASR 모델: Wav2Vec2-XLSR-base (95M, 4080 환경) + CTC head + 한국어 IPA vocab
+	•	학습 데이터: KsponSpeech (성인) 50% + AIHub 어린이 음성 데이터셋 sn=266 (학년 1~6) 50%, 정상 발화만 사용
+	•	음향학적 분석: OpenSMILE eGeMAPS 88-dim feature → 정상 분포 reference 구축 → z-score 기반 deviation 측정
+	•	변동 분류: Rule 기반 SUB/DEL + OpenSMILE z-score 기반 DIS (ML 학습 없음)
+	•	Forced alignment: torchaudio.functional.forced_align 도입
+	•	평가: AIHub val PER (정량) + 라이브 시연 (정성)
+	•	임상 검증·LLM 피드백: HOPE Research 후속 단계로 분리
+1.4 v0.3 대비 핵심 변경
+
+항목
+v0.3
+v0.8
+이유
+misarticulation 학습
+D4 합성 + D5 수집
+전부 폐기
+§1.2 통찰(LM-light) 따르면 불필요
+GPU 환경
+A100
+4080 16GB
+학부 환경 현실
+임상 검증
+전문가 일치율 80%+
+AIHub PER로 단순화
+SLP 자문 0건
+일정
+12주
+10주
+HOPE 일정 부합
+음향학적 분석
+없음
+OpenSMILE 추가
+지도교수 자문
+Forced alignment
+누락
+torchaudio 도입
+frame-음소 매핑 메커니즘 누락
+
+2. 시스템 정체성 및 본질 정의
+2.1 핵심 통찰
+Wav2Vec2-CTC는 LM-light (Language Model 보정이 약함) 모델로, frame-level acoustic posterior를 직접 출력한다. 즉 들린 음향을 그대로 음소로 매핑할 뿐, "이 단어가 더 자연스럽다"라는 언어 정보를 거의 사용하지 않는다.
+이 통찰의 자연스러운 도출:
+	•	정상 ㅅ 음향 → ㅅ 출력 / 정상 ㄷ 음향 → ㄷ 출력만 정확히 학습하면 됨
+	•	사용자가 "사과"를 "다과"라고 발음하면 → 모델은 들린 그대로 ㄷ 출력
+	•	우리는 모델 출력을 목표 음소와 비교해서 차이 검출
+결론: misarticulation 학습 데이터는 필요 없다. 정상 발화 학습만으로 misarticulation 자동 인식이 가능하다.
+2.2 시스템 본질 — 청자(Listener) 모델
+본 시스템은 임상 진단 시스템이 아니라 음소 차이 분석 시스템이다.
+측면
+임상 진단 시스템
+본 시스템 (청자 모델)
+입력
+환자 음성
+사용자 음성
+출력
+장애 유무·중증도 진단
+들린 음소 시퀀스 + acoustic deviation
+검증 주체
+언어재활사 (SLP)
+AIHub 자체 라벨
+사용 책임
+임상 의료 행위
+발음 학습 보조
+타깃 사용자
+조음음운장애 환자만
+한국어 발음 학습자 일반
+2.3 발표 Narrative
+본 시스템은 한국어 발음의 음소 단위 차이를 분석하는 AI prototype이다. 사용자가 어떻게 발음하든 모델은 들리는 음향대로 음소를 출력하며, 이를 목표 음소와 비교해 차이를 알려준다. 학습은 정상 발화 데이터(KsponSpeech 성인 + AIHub 아동)로만 이루어졌으며, 모델은 misarticulation 데이터를 본 적 없음에도 Wav2Vec2-CTC의 LM-light 특성상 misarticulation을 자연스럽게 인식한다.
+임상 환자 대상 검증 및 LLM 기반 자연어 피드백은 HOPE Research 후속 단계(8월~)에서 박규동 교수 협의 하에 진행 예정이다.
+2.4 명시할 한계
+발표 자료에 다음 한계를 명시한다.
+	•	misarticulation 인식 정확도의 정량 evidence 부재 (라이브 시연으로 정성 검증)
+	•	조음음운장애 아동의 비정형 음향에서의 robustness 미검증 (후속 임상 협력 필요)
+	•	Module D 피드백 템플릿의 SLP 검수 미진행 (사용 시 보호자·교사 동행 권장)
+
+3. 시스템 아키텍처
+3.1 End-to-End Flow
+Mobile App → API Gateway → Inference Server의 3-tier 구조. 추론 서버는 6단계 pipeline으로 구성된다.
+
+3.2 Component Responsibilities
+Layer
+Component
+Tech / SLO
+Client
+녹음 (16kHz mono PCM), 결과 시각화, 게이미피케이션
+React Native
+API Gateway
+인증, 음성 파일 임시 저장, 추론 서버 라우팅
+Firebase Auth + Cloud Functions
+Inference
+Wav2Vec2 → forced align → OpenSMILE → align → PCC → feedback
+FastAPI 서버, p95 ≤ 2.5s
+Storage
+사용자 프로필, 진도, raw 음성 (옵트인)
+Firebase Firestore + GCS
+3.3 추론 파이프라인 단계별 상세
+서버 내부에서 음성 1건이 받아져 결과 JSON으로 반환되기까지의 처리 단계.
+단계
+모듈
+입력
+출력
+1. Preprocess
+audio.utils
+raw .wav
+16kHz mono, normalized
+2. Phoneme Recognition
+Module A (Wav2Vec2-base)
+Wav2Vec2 features
+음소 시퀀스 + frame logits
+3. Forced Alignment ★
+Module A+ (torchaudio)
+frame logits + 예측 음소
+각 음소의 (start, end) frame
+4. OpenSMILE Analysis ★
+Module A++ (eGeMAPS)
+audio + 음소 boundary
+음소별 z-score (정상 분포 대비)
+5. Phoneme Alignment
+Module B-1 (NW)
+target + predicted 음소
+[(tgt, act, status), ...]
+6. Variation Classification
+Module B-2 (rule + acoustic)
+alignment + z-scores
+변동 종류 (SUB/DEL/DIS)
+7. PCC Calculation
+Module C
+classifications
+PCC 점수 (0-100)
+8. Feedback Generation
+Module D (template)
+classifications + PCC
+kid_text 피드백 멘트
+★ 표시는 v0.8에서 신규 추가된 모듈.
+3.4 API Contract (v1)
+Request:
+POST /v1/utterance/analyze
+Content-Type: multipart/form-data
+ 
+fields:
+  audio: <wav file, 16kHz mono, ≤5s>
+  target_word: '사과'
+  target_phonemes: ['s','a','g','w','a']
+  user_id: 'kid_001'
+Response 200:
+{
+  'pcc': 75.0,
+  'phoneme_results': [
+    {
+      'target': 's',
+      'actual': 't',
+      'status': 'SUB',
+      'variation': 'STOPPING',
+      'acoustic_deviation_z': null
+    },
+    {
+      'target': 'a',
+      'actual': 'a',
+      'status': 'OK',
+      'variation': null,
+      'acoustic_deviation_z': 0.3
+    }
+  ],
+  'feedback': {
+    'kid_text': '사 발음할 때 마찰이 약했어. 혀를 살짝 안쪽으로...',
+    'practice_word_next': '시계'
+  },
+  'latency_ms': 1840,
+  'model_version': 'kspc-v0.8-20260620'
+}
+
+4. 데이터 전략
+4.1 Core Principle
+정상 발화 데이터로만 학습한다. 합성 misarticulation, 직접 수집 데이터, 외국인 발음 데이터는 모두 사용하지 않는다.
+Wav2Vec2-CTC의 LM-light 특성상 정상 발화로만 학습해도 misarticulation은 자연스럽게 다른 음소로 출력된다 (§2.1 참조).
+4.2 데이터셋 구성
+ID
+데이터셋
+출처
+역할
+비중
+D1
+KsponSpeech
+AIHub 공개
+한국어 음소 인식 base
+50%
+D2
+AIHub 어린이 음성 (sn=266)
+AIHub 공개
+8~12세 acoustic 적응 (메인)
+50%
+D3
+AIHub 자유대화 7~10세 (sn=108)
+AIHub 공개
+보강 (옵션)
+옵션
+D4
+AIHub 한국어 아동 음성 (sn=540)
+AIHub 공개
+보강 (옵션)
+옵션
+4.3 데이터셋 우선순위 및 다운로드 전략
+4080 환경의 디스크 부담을 고려하여 모든 데이터셋을 받지 않는다.
+	•	W1: D1 (KsponSpeech 100h subset) + D2 (sn=266 메인) 신청
+	•	W2: 데이터 수령 확인 후 sanity check 진행
+	•	W3 이후: 필요 시 D3 또는 D4 보조 추가
+AIHub 데이터 신청 후 승인까지 통상 1~3주 소요. W1 즉시 신청이 critical.
+4.4 정상 분포 Reference 구축 (★ v0.8 신규)
+OpenSMILE 기반 acoustic deviation 측정의 baseline으로 사용할 정상 분포를 학습 데이터에서 추출한다.
+# 학습 완료 후 1회 실행
+# D1 + D2 train set의 모든 발화에 대해:
+for utterance in train_data:
+    boundary = forced_align(utterance)
+    features = extract_opensmile(utterance, boundary)
+ 
+# 음소별 정상 분포 통계
+phoneme_stats = {
+  's': {
+    'spectral_HF_energy': {'mean': 0.42, 'std': 0.08},
+    'spectral_centroid': {'mean': 5800, 'std': 420},
+    'F1_freq': {'mean': 410, 'std': 35},
+  },
+  't': {...},
+}
+ 
+# JSON 또는 pickle로 저장 → 추론 시 로드
+이 reference는 학습 데이터의 정상 발화 통계이므로 추가 학습이나 SLP 자문 없이 자동 산출된다.
+4.5 데이터 라벨 스키마
+{
+  'utt_id': 'kspon_w042_001',
+  'audio_path': 'data/kspon/w042_001.wav',
+  'speaker_id': 'spk_001',
+  'speaker_meta': {
+    'age_group': 'adult' | 'child_g1_g6',
+    'sex': 'M' | 'F'
+  },
+  'target_word': '사과',
+  'target_phonemes': ['s','a','g','w','a'],
+  'data_source': 'kspon' | 'aihub_kid_266' | 'aihub_kid_108',
+  'duration_s': 1.84,
+  'snr_db': 32.5
+}
+v0.3 스키마와 차이: 임상 메타데이터(has_dx, dx_type, pcc_baseline, labeling agreement) 필드 모두 제거. 정상 발화 전용으로 단순화.
+4.6 Train / Val / Test 분리
+	•	Speaker-disjoint: 같은 화자가 train/val/test 동시 등장 금지
+	•	D1 (KsponSpeech): 80% train / 10% val / 10% test
+	•	D2 (sn=266): 80% train / 10% val / 10% test
+	•	최종 평가는 D1 test set (성인) + D2 test set (아동) 양쪽에서 진행
+
+5. 모델 설계
+5.1 STT 모델 선택
+Wav2Vec2-XLSR-base (95M params) + CTC head + Korean IPA vocab. v0.3에서 large(317M) 가정이었으나 4080 16GB 환경에서 base로 다운그레이드. Whisper 배제 결정은 그대로 유지.
+5.1.1 base vs large 비교 (4080 환경)
+항목
+base (95M)
+large (317M)
+VRAM (학습)
+약 5GB
+약 10~12GB
+per_device batch
+16
+4
+grad_accum
+2
+8
+effective batch
+32
+32
+학습 시간
+약 3~4일
+약 7~8일
+권고
+Stage 1 메인
+stretch goal
+5.2 Phoneme Vocabulary
+한국어 IPA 35 token (자음 19 + 반모음 2 + 모음 10 + special 4).
+{
+  '<pad>': 0,        # CTC blank
+  '<unk>': 1,
+  
+  # 자음 (19)
+  'k': 2,   'k͈': 3,   'n': 4,   't': 5,   't͈': 6,
+  'l': 7,   'm': 8,   'p': 9,   'p͈': 10,  's': 11,
+  's͈': 12, 'ŋ': 13,  'tɕ': 14, 'tɕ͈': 15, 'tɕʰ': 16,
+  'kʰ': 17, 'tʰ': 18, 'pʰ': 19, 'h': 20,
+  
+  # 반모음 (2)
+  'w': 21,  'j': 22,
+  
+  # 모음 (10)
+  'a': 23,  'ɛ': 24,  'ʌ': 25,  'e': 26,  'o': 27,
+  'ø': 28,  'u': 29,  'y': 30,  'ɯ': 31,  'i': 32,
+  
+  # boundary
+  '<sil>': 33,
+  '<eos>': 34
+}
+주의: multi-character IPA (tɕ, t͈ 등)는 단일 token으로 매핑. tokenizer 구현 시 별도 처리 필요.
+5.3 한글-IPA 변환
+	•	1차: g2pK 사용 (한국어 G2P open-source)
+	•	자체 보완: 학령기 단어 150개 IPA 매핑은 수동 검수 lookup table
+	•	주의: g2pK는 표준 발음 규칙(연음, 비음화)을 적용하므로 단어 단위 isolated speech 인식에는 일부 규칙 비활성화 필요
+	•	W2 sanity check 단계에서 g2pK 변환 정확도 검증
+5.4 Module A: Phoneme Recognizer
+5.4.1 Architecture
+from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+ 
+model = Wav2Vec2ForCTC.from_pretrained(
+    'facebook/wav2vec2-base-xlsr',     # ★ base (v0.3은 large)
+    vocab_size=35,
+    ctc_loss_reduction='mean',
+    pad_token_id=0,
+)
+ 
+# input shape: (batch, samples) at 16kHz
+# output shape: (batch, frames, vocab_size) where frame ≈ 20ms
+5.4.2 Training Hyperparameters
+항목
+값
+Optimizer
+AdamW (β1=0.9, β2=0.98, weight_decay=0.005)
+Learning rate
+3e-5 peak, warmup 10% steps, linear decay
+Per-device batch (4080)
+16 (base) / 4 (large)
+Gradient accumulation
+2 (base) / 8 (large) → effective batch 32
+Gradient checkpointing
+True (★ v0.8 신규, VRAM 절감)
+Flash Attention 2
+활성화 권고 (★ v0.8 신규)
+Mixed precision
+bf16 (4080 Ada Lovelace 지원)
+Epochs
+Stage 1: 20, Stage 2: 10
+Loss
+CTC loss (label smoothing 0.1)
+Freeze 정책
+첫 5 epoch: feature extractor freeze, 이후 unfreeze
+5.4.3 Decoding
+	•	Stage 1: CTC greedy decode (속도 우선)
+	•	Stage 2: CTC beam search (beam=10)
+	•	주의: 단어 LM 사용 금지 (LM bias가 본 과제에 해롭다)
+5.5 Module A+: Forced Alignment (★ v0.8 신규)
+v0.3에서 누락되었던 모듈. CTC posterior로부터 음소별 frame boundary를 결정.
+import torchaudio.functional as F
+ 
+def forced_align(audio_features, predicted_phonemes, blank_idx=0):
+    """
+    Args:
+        audio_features: (1, T, vocab_size) log probabilities
+        predicted_phonemes: (1, N) phoneme indices
+    Returns:
+        list of (phoneme_idx, start_frame, end_frame)
+    """
+    alignments, scores = F.forced_align(
+        audio_features,
+        predicted_phonemes,
+        blank=blank_idx
+    )
+    
+    # 연속된 같은 phoneme의 frame 범위 추출
+    boundaries = []
+    current_phoneme = alignments[0, 0].item()
+    start = 0
+    for t in range(1, alignments.shape[1]):
+        if alignments[0, t].item() != current_phoneme:
+            boundaries.append((current_phoneme, start, t-1))
+            current_phoneme = alignments[0, t].item()
+            start = t
+    boundaries.append((current_phoneme, start, alignments.shape[1]-1))
+    
+    return boundaries
+Module B-2와 Module A++ 모두 frame-음소 매핑이 필요하므로 forced alignment는 필수 전처리.
+5.6 Module A++: OpenSMILE Acoustic Analysis (★ v0.8 신규)
+지도교수 자문 반영. Wav2Vec2-CTC의 이산 출력 한계를 연속적 acoustic feature로 보완.
+5.6.1 Feature Extraction
+import opensmile
+ 
+smile = opensmile.Smile(
+    feature_set=opensmile.FeatureSet.eGeMAPSv02,
+    feature_level=opensmile.FeatureLevel.LowLevelDescriptors,
+)
+ 
+# 전체 발화에서 frame-level feature 추출
+features_df = smile.process_file('audio.wav')
+ 
+# 88-dim columns:
+#   F0semitoneFrom27.5Hz_sma3nz, jitterLocal_sma3nz,
+#   F1frequency_sma3nz, F2frequency_sma3nz, F3frequency_sma3nz,
+#   spectralFlux_sma3nz, mfcc1-4_sma3nz, ...
+5.6.2 음소별 Feature 집계
+def aggregate_phoneme_features(features_df, phoneme_boundaries, frame_rate_ms=20):
+    """각 음소 구간의 OpenSMILE feature 집계 (mean, std)"""
+    phoneme_features = []
+    for phoneme_idx, start_frame, end_frame in phoneme_boundaries:
+        start_ms = start_frame * frame_rate_ms
+        end_ms = end_frame * frame_rate_ms
+        segment = features_df[
+            (features_df.index >= start_ms) & 
+            (features_df.index <= end_ms)
+        ]
+        phoneme_features.append({
+            'phoneme': IPA_VOCAB_INV[phoneme_idx],
+            'feature_mean': segment.mean().to_dict(),
+            'feature_std': segment.std().to_dict()
+        })
+    return phoneme_features
+5.6.3 Z-score 기반 Deviation 측정
+def compute_deviation_zscore(phoneme_features, normal_dist_ref):
+    """음소별 feature를 정상 분포 reference와 비교하여 z-score 산출"""
+    results = []
+    for pf in phoneme_features:
+        phoneme = pf['phoneme']
+        ref = normal_dist_ref[phoneme]
+        
+        # 핵심 feature 4~5개에 대한 z-score 평균
+        key_features = [
+            'spectralFlux_sma3nz',
+            'F1frequency_sma3nz',
+            'F2frequency_sma3nz',
+            'mfcc1_sma3nz'
+        ]
+        
+        z_scores = []
+        for f in key_features:
+            mean = pf['feature_mean'][f]
+            ref_mean = ref[f]['mean']
+            ref_std = ref[f]['std']
+            z = abs(mean - ref_mean) / (ref_std + 1e-8)
+            z_scores.append(z)
+        
+        avg_z = sum(z_scores) / len(z_scores)
+        results.append({'phoneme': phoneme, 'z_score': avg_z})
+    
+    return results
+5.7 Module B-1: Phoneme Alignment
+Needleman-Wunsch global alignment + articulatory feature distance. v0.3 결정 그대로 유지.
+FEATURES = {
+    's':  {'manner': 'fricative', 'place': 'alveolar', 'voice': False},
+    't':  {'manner': 'stop',      'place': 'alveolar', 'voice': False},
+    'tɕ': {'manner': 'affricate', 'place': 'palatal',  'voice': False},
+    'l':  {'manner': 'lateral',   'place': 'alveolar', 'voice': True},
+}
+ 
+def dist(p1, p2):
+    if p1 == p2:
+        return 0
+    f1, f2 = FEATURES[p1], FEATURES[p2]
+    diff = sum(f1[k] != f2[k] for k in f1)
+    return diff / len(f1)
+ 
+# /s/ vs /t/: manner 다름 → 0.33
+# /s/ vs /m/: manner, place, voice 다름 → 1.0
+5.8 Module B-2: Variation Classifier
+v0.3의 ML head 폐기. Rule-based + acoustic deviation hybrid로 단순화.
+def classify_variation(alignment_result, acoustic_deviations, z_threshold=2.5):
+    classifications = []
+    for i, (tgt, act, status) in enumerate(alignment_result):
+        z = acoustic_deviations.get(i)
+        
+        if status == 'OK':
+            # 음소는 일치 → DIS 검사
+            if z is not None and z > z_threshold:
+                variation = 'DIS'    # 왜곡: 음소 맞지만 음향 deviation
+            else:
+                variation = None     # 정상
+                
+        elif status == 'SUB':
+            variation = match_substitution_rule(tgt, act)
+            # 예: STOPPING (ㅅ→ㄷ), FRICATION
+            
+        elif status == 'DEL':
+            variation = match_deletion_rule(tgt, position=i)
+            # 예: LIQUID_DEL (ㄹ 종성 생략)
+            
+        elif status == 'INS':
+            variation = None    # 첨가는 분류 대상 아님
+        
+        classifications.append((tgt, act, status, variation, z))
+    
+    return classifications
+5.9 Module C: PCC Calculation
+표준 공식 그대로. v0.3 결정 유지.
+def pcc(classifications):
+    correct = 0
+    total_target_consonants = 0
+    
+    for tgt, act, status, variation, z in classifications:
+        if is_consonant(tgt):
+            total_target_consonants += 1
+            if status == 'OK' and variation != 'DIS':
+                correct += 1
+    
+    if total_target_consonants == 0:
+        return None
+    return correct / total_target_consonants * 100
+ 
+# 주의:
+# - 모음은 PCC에서 제외 (언어병리학 표준)
+# - INS(첨가)는 분모에 포함 안 함
+# - DIS(왜곡)는 'OK 아님'으로 분류
+5.10 Module D: Feedback Generation
+템플릿 기반. SLP 검수는 후속 단계에서. v0.8에서는 acoustic deviation 정량 정보를 피드백에 포함.
+TEMPLATES = {
+    ('STOPPING', 's'):
+        "사 발음할 때 혀를 살짝 안쪽으로 넣어볼까? 바람이 새는 소리처럼.",
+    ('STOPPING', 'tɕ'):
+        "자 발음할 때 혀끝을 입천장에 살짝 붙여볼까?",
+    ('LIQUID_DEL', 'l'):
+        "끝에 'ㄹ' 소리를 빼먹었어. 혀끝을 입천장에 살짝 닿게 해볼까?",
+    ('DIS', 's'):
+        "사 발음에서 마찰이 약했어 (정상 대비 {z:.1f}σ).",
+}
+ 
+def generate_feedback(classifications):
+    feedbacks = []
+    for tgt, act, status, variation, z in classifications:
+        if variation:
+            key = (variation, tgt)
+            if key in TEMPLATES:
+                msg = TEMPLATES[key].format(z=z) if z else TEMPLATES[key]
+                feedbacks.append(msg)
+    return feedbacks
+v0.3과 차이: gemma-2b 등 LLM 사용은 후속으로 분리. 본 대회에서는 템플릿만.
+
+6. 학습 전략
+6.1 Curriculum (2-stage 단순화)
+v0.3의 4-stage curriculum (S1→S2→S3→S4)을 2-stage로 단순화. D4·D5 폐기로 합성·실제 아동 stage 사라짐.
+Stage
+데이터
+목적
+통과 조건
+Stage 1-A
+D1 (KsponSpeech)
+한국어 음소 base 학습
+성인 val PER ≤ 25%
+Stage 1-B
+D1 60% + D2 40%
+아동 acoustic 적응
+아동 val PER ≤ 35%
+Stage 2
+D1 50% + D2 50% + aug
+최종 fine-tune
+아동 val PER ≤ 30%
+6.2 Augmentation
+v0.3 결정 그대로 유지.
+	•	SpecAugment: time mask (≤30 frames), frequency mask (≤27 channels)
+	•	Pitch shift: ±2 semitones (Stage 1-B부터 ±5까지)
+	•	Speed perturbation: 0.9 / 1.0 / 1.1
+	•	Noise injection: SNR 10~30dB 균등
+6.3 Reproducibility
+	•	All seeds fixed (numpy=42, torch=42, random=42)
+	•	DVC로 데이터 버전 관리 + W&B 또는 TensorBoard로 실험 추적
+	•	requirements.txt + Docker 이미지로 환경 재현
+	•	HuggingFace Hub private repo에 model card 저장
+6.4 정상 분포 Reference 추출 (★ v0.8 신규)
+Stage 2 학습 완료 후 1회 실행:
+	•	D1 + D2 train set 전체에 forced alignment 수행
+	•	각 음소 구간에 OpenSMILE feature 추출
+	•	음소별 feature 분포 통계 산출 (mean, std)
+	•	JSON 또는 pickle로 저장 → 추론 시 로드
+	•	이는 학습이 아니라 통계 추출이므로 GPU 불필요
+
+7. 평가 계획
+7.1 Metric Taxonomy
+v0.3의 임상 metric 5종(PCC MAE, Pearson r, Sensitivity/Specificity, AUC, expert κ) 모두 폐기. SLP ground truth 없이 측정 불가능하기 때문.
+v0.8에서는 측정 가능한 정량 지표만 유지하고, misarticulation 인식 능력은 정성 시연으로 검증.
+Category
+Metric
+정의
+타깃
+측정 데이터
+Technical
+성인 PER
+Phoneme Error Rate
+≤ 25%
+D1 val
+Technical
+아동 PER
+Phoneme Error Rate
+≤ 30%
+D2 val
+Acoustic
+정상 분포 z-score
+음소별 feature deviation
+reference 구축
+D1+D2 train
+Operational
+p95 latency
+E2E 추론 시간
+≤ 2.5s
+FastAPI bench
+Demo
+라이브 시연
+misarticulation 정성 검증
+5~6 케이스 성공
+실시간
+7.2 라이브 시연 프로토콜
+발표 현장에서 다음 케이스를 시연한다.
+	•	케이스 1: 정확 발음 "사과" → PCC 100%
+	•	케이스 2: 일부러 "다과"로 발음 → 모델 "ㅅ→ㄷ 폐쇄음화" 진단, PCC 75%
+	•	케이스 3: 일부러 "무"로 발음 (물) → 모델 "ㄹ 생략" 진단, PCC 80%
+	•	케이스 4: 약한 마찰의 ㅅ 발음 → OpenSMILE z-score로 DIS 검출
+	•	케이스 5: 자유 발화 1개 → 다양한 케이스 시연
+청중·심사위원이 직관적으로 misarticulation 인식 능력을 검증.
+7.3 Demo Plan B
+시연 당일 클라우드 또는 네트워크 장애 대비:
+	•	사전 녹음 5케이스 + 모델 응답 영상 사전 녹화
+	•	로컬 FastAPI 서버 + 노트북 시연 가능 환경
+	•	결과 JSON 시각화 정적 HTML 데모
+7.4 Failure Analysis
+	•	Confusion matrix: 음소별 PER breakdown
+	•	자주 틀리는 케이스 30개 cherry-pick → 음향 spectrogram 청취 분석
+	•	정상 분포 z-score 분포 시각화 (음소별)
+
+8. 구현: 디렉토리 구조 및 코드 골격
+8.1 Repository 구조
+speech-coach/
+├── README.md
+├── pyproject.toml
+├── requirements.txt
+├── .dvc/
+├── .github/workflows/
+│
+├── data/
+│   ├── d1_kspon/
+│   ├── d2_aihub_kid_266/
+│   └── normal_distribution_ref.json   # ★ v0.8 신규
+│
+├── configs/
+│   ├── data/stage1_a.yaml, stage1_b.yaml, stage2.yaml
+│   ├── model/wav2vec2_base_xlsr.yaml
+│   └── train/stage1.yaml, stage2.yaml
+│
+├── src/speech_coach/
+│   ├── data/
+│   │   ├── g2p_ko.py
+│   │   ├── augment.py
+│   │   └── dataset.py
+│   │
+│   ├── models/
+│   │   ├── phoneme_recognizer.py       # Module A
+│   │   ├── forced_aligner.py           # Module A+ ★ v0.8
+│   │   ├── opensmile_analyzer.py       # Module A++ ★ v0.8
+│   │   ├── aligner.py                  # Module B-1
+│   │   ├── variation_classifier.py     # Module B-2
+│   │   ├── pcc.py                      # Module C
+│   │   └── feedback.py                 # Module D
+│   │
+│   ├── training/
+│   │   ├── trainer.py
+│   │   └── callbacks.py
+│   │
+│   ├── eval/
+│   │   ├── metrics.py
+│   │   └── normal_distribution.py      # ★ v0.8 신규
+│   │
+│   ├── serving/
+│   │   ├── api.py
+│   │   ├── pipeline.py
+│   │   └── schemas.py
+│   │
+│   └── utils/
+│       ├── audio.py
+│       └── phonetic_features.py
+│
+├── scripts/
+│   ├── prepare_d1_kspon.py
+│   ├── prepare_d2_aihub_kid.py
+│   ├── train_stage1.py
+│   ├── train_stage2.py
+│   ├── build_normal_distribution.py    # ★ v0.8 신규
+│   ├── eval_test.py
+│   └── deploy_local.sh
+│
+├── tests/
+│   ├── test_g2p_ko.py
+│   ├── test_aligner.py
+│   ├── test_forced_aligner.py          # ★ v0.8 신규
+│   ├── test_opensmile_analyzer.py      # ★ v0.8 신규
+│   ├── test_variation_classifier.py
+│   ├── test_pcc.py
+│   └── test_api.py
+│
+└── docker/
+    ├── train.Dockerfile
+    └── serve.Dockerfile
+8.2 추론 파이프라인 코드
+# src/speech_coach/serving/pipeline.py
+from .schemas import AnalyzeRequest, AnalyzeResponse, PhonemeResult
+from ..models import (
+    PhonemeRecognizer, ForcedAligner, OpenSmileAnalyzer,
+    NeedlemanWunschAligner, VariationClassifier,
+    calc_pcc, FeedbackGenerator
+)
+from ..utils.audio import preprocess
+import time
+ 
+class InferencePipeline:
+    def __init__(self, ckpt_dir, model_version, normal_dist_path):
+        self.recognizer = PhonemeRecognizer.from_pretrained(ckpt_dir)
+        self.forced_aligner = ForcedAligner()                  # ★ v0.8
+        self.opensmile = OpenSmileAnalyzer(normal_dist_path)   # ★ v0.8
+        self.nw_aligner = NeedlemanWunschAligner()
+        self.var_clf = VariationClassifier()
+        self.feedback = FeedbackGenerator()
+        self.model_version = model_version
+ 
+    def __call__(self, req: AnalyzeRequest) -> AnalyzeResponse:
+        t0 = time.time()
+        
+        # 1. Preprocess
+        audio = preprocess(req.audio_bytes, target_sr=16000)
+        
+        # 2. Phoneme Recognition (Module A)
+        actual_phonemes, frame_logits, conf = self.recognizer(audio)
+        
+        # 3. Forced Alignment (Module A+) ★ v0.8
+        phoneme_boundaries = self.forced_aligner(
+            frame_logits, actual_phonemes
+        )
+        
+        # 4. OpenSMILE Analysis (Module A++) ★ v0.8
+        acoustic_deviations = self.opensmile.analyze(
+            audio, phoneme_boundaries
+        )
+        
+        # 5. Phoneme Alignment (Module B-1)
+        alignment = self.nw_aligner.align(
+            target=req.target_phonemes,
+            predicted=actual_phonemes
+        )
+        
+        # 6. Variation Classification (Module B-2)
+        classifications = self.var_clf.classify(
+            alignment, acoustic_deviations
+        )
+        
+        # 7. PCC Calculation (Module C)
+        pcc_score = calc_pcc(classifications)
+        
+        # 8. Feedback (Module D)
+        fb = self.feedback.generate(
+            req.target_word, classifications, pcc_score
+        )
+        
+        results = [
+            PhonemeResult(
+                target=tgt, actual=act, status=status,
+                variation=variation, acoustic_deviation_z=z
+            )
+            for tgt, act, status, variation, z in classifications
+        ]
+        
+        return AnalyzeResponse(
+            pcc=pcc_score,
+            phoneme_results=results,
+            feedback=fb,
+            latency_ms=int((time.time() - t0) * 1000),
+            model_version=self.model_version
+        )
+8.3 작성할 Tests
+	•	test_g2p_ko: 한글 단어 100개의 IPA 변환 골드 라벨 일치
+	•	test_forced_aligner: 알려진 alignment 케이스 20개
+	•	test_opensmile_analyzer: feature 추출 후 정상 분포 비교 정확성
+	•	test_aligner: 알려진 정렬 케이스 20개 (사과/다과, 라면/야면 등)
+	•	test_variation_classifier: SUB/DEL/DIS 분류 케이스 30개
+	•	test_pcc: 정렬 결과로부터 PCC 계산 정확성
+	•	test_api: FastAPI TestClient로 /v1/utterance/analyze 통합 테스트
+
+9. 일정 (10주)
+9.1 주차별 작업
+주차
+기간
+작업
+산출물
+W1
+5/4-5/10
+AIHub D1·D2 신청, 4080 환경 셋업, repo 구조 확정, DVC 설정
+신청 완료, dev env, git repo
+W2
+5/11-5/17
+g2pK 검증, ★ Wav2Vec2-base sanity check (100문장 24h)
+g2p_ko.py, sanity check 보고서
+W3
+5/18-5/24
+Stage 1-A 학습 (KsponSpeech 100h)
+checkpoint v0.1, 성인 PER
+W4
+5/25-5/31
+Stage 1-B 학습, Module B-1 구현 (NW + articulatory)
+checkpoint v0.2, aligner.py
+W5
+6/1-6/7
+Stage 2 fine-tune, ★ Forced alignment 통합 (torchaudio)
+checkpoint v0.3, forced_aligner.py
+W6
+6/8-6/14
+★ OpenSMILE 통합, ★ 정상 분포 reference 구축
+opensmile_analyzer.py, normal_dist.json
+W7
+6/15-6/21
+Module B-2 구현, Module C·D 통합, FastAPI 서버
+variation_classifier.py, FastAPI v0.1
+W8
+6/22-6/28
+내부 QA, 시연 케이스 사전 녹음, 데모 UI
+통합 테스트, 시연 영상
+W9
+6/29-7/5
+D1·D2 test set 평가, failure analysis, 발표 자료 초안
+평가 보고서, 발표 자료 v1
+W10
+7/6-7/12
+발표 자료 완성, 시연 리허설, ★ HOPE 시연
+최종 발표 + 시연
+9.2 마일스톤
+마일스톤
+시점
+산출물
+통과 조건
+M1
+5월 3주
+STT base 학습 완료
+성인 PER ≤ 25%
+M2
+6월 3주
+전체 모듈 통합 완료
+E2E 추론 동작
+M3
+7월 1주
+통합 시스템 평가 완료
+아동 PER ≤ 30%, 시연 5케이스 성공
+M4
+7월 2주
+발표 준비 완료
+리허설 통과
+9.3 Critical Path
+v0.8의 critical path는 다음 두 가지이다.
+	•	AIHub 데이터 신청·승인 (W1 즉시 신청, 1~3주 소요)
+	•	Wav2Vec2 한국어 IPA fine-tuning sanity check (W2)
+v0.3의 critical path였던 D5 직접 수집은 폐기되어 critical path에서 제외됨.
+
+10. 리스크 레지스터
+v0.3의 R1·R2·R7 폐기 (D5 폐기로 무효화). 남은 리스크와 추가된 리스크.
+ID
+리스크
+P
+I
+Mitigation / Trigger
+R1
+한국어 IPA Wav2Vec2 reference 부재
+MED
+HIGH
+W2 sanity check 의무화. PER > 50% 시 grapheme + post-hoc IPA 매핑으로 swap
+R2
+AIHub 데이터 승인 지연
+MED
+MED
+W1 즉시 신청. KsponSpeech 우선 진행
+R3
+4080 학습 시간 폭발
+MED
+MED
+base 모델 시작. SpecAugment 강도 조절. early stopping aggressive
+R4
+g2pK 변환 노이즈
+MED
+LOW
+수동 IPA lookup 150단어. g2pK는 광범위 학습 데이터에만
+R5
+Forced alignment 정확도 부족
+LOW
+MED
+torchaudio 기본. 부족 시 MFA로 swap
+R6
+OpenSMILE 정상 분포 노이즈
+MED
+MED
+충분한 train set. z-threshold 보수적 (2.5)
+R7
+발표 narrative 일관성
+LOW
+MED
+수행계획서 v1.1로 동기화
+R8
+일정 초과
+MED
+MED
+scope 축소 우선순위 명시 (아래 참조)
+10.1 Scope Reduction Priority (R8 발동 시)
+	•	Stage 2 large 모델 전환 → base 모델 유지
+	•	OpenSMILE feature 88-dim → 핵심 4~5개로 축소
+	•	Module D 템플릿 다양성 → 핵심 음소 3개만
+	•	Cloud Run 배포 → 로컬 FastAPI demo만
+	•	게임 UI 부가 화면 → 핵심 3화면만
+
+11. v0.3 대비 주요 변경 요약
+항목
+v0.3 (원안)
+v0.8 (최종)
+변경 사유
+시스템 정체성
+임상 진단 시스템
+음소 차이 분석 prototype
+임상 검증 자원 부재
+misarticulation 학습
+D4 + D5
+정상 발화만 학습
+§1.2 통찰 (LM-light)
+GPU 환경
+A100
+RTX 4080 16GB
+학부 환경
+모델 크기
+Wav2Vec2-large (317M)
+Wav2Vec2-base (95M)
+VRAM 제약
+변동 분류 학습
+ML head
+Rule + acoustic z-score
+학습 데이터 부재
+Forced alignment
+누락
+torchaudio 도입
+frame-음소 매핑 필수
+음향학적 분석
+없음
+OpenSMILE 88-dim
+지도교수 자문
+임상 metric
+PCC MAE 등
+AIHub PER만
+SLP ground truth 부재
+검증 목표
+전문가 일치율 80%+
+PER ≤ 25% / ≤ 30%
+측정 가능 지표
+일정
+12주
+10주
+HOPE 일정 부합
+LLM 피드백
+Stage 3
+후속 분리
+본 대회 범위 외
+SLP 검증
+Module D 검수
+자체 진행, 한계 명시
+자문 0건
+11.1 v0.3에서 그대로 유지된 핵심 결정
+v0.3에서 정확하게 결정되어 v0.8까지 변경 없이 유지된 항목:
+	•	Whisper 배제, Wav2Vec2-XLSR-Phoneme 채택
+	•	CTC loss + LM-light 출력
+	•	IPA 기반 vocab (35 token)
+	•	Articulatory feature distance
+	•	PCC 표준 공식 (모음 제외, INS 분모 제외)
+	•	Speaker-disjoint split
+	•	Sensitivity/Specificity framing (false alarm을 가장 해로운 오류로 정의)
+	•	Stage-gated entry/exit 조건 구조
+이 결정들은 도메인 통찰에서 나온 것이라 자원 환경과 무관하게 옳다.
+
+12. 후속 과제 (HOPE Research)
+본 대회 범위에서 분리된 항목들. 8월 이후 박규동 교수 협의 하에 진행 예정.
+12.1 임상 검증
+	•	실제 조음음운장애 아동 모집 (사설 언어치료실 협력 기관 확보)
+	•	부모 동의서·익명화 정책·IRB 면제 자문 진행
+	•	SLP 자문 확보 후 ground truth 라벨링
+	•	PCC MAE, Sensitivity/Specificity, Pearson r 등 임상 지표 측정
+	•	사전-사후 PCC 변화 통계 검증
+12.2 LLM 피드백 통합
+	•	gemma-2-2b-it 또는 ko-gemma fine-tune
+	•	발화 분석 결과 JSON + persona prompt → kid-friendly text 생성
+	•	의료 조언 회피 가드, 부모/치료사 escalation cue 제공
+	•	SLP 5명이 100건 출력에 대해 적절성 평가
+12.3 학술 출판
+	•	한국언어치료학회(JSLHD) 또는 한국HCI학회 논문 투고
+	•	기여: 한국어 IPA 기반 Wav2Vec2 fine-tuning + 정상 분포 reference 기반 deviation 측정
+	•	프로젝트 코드 GitHub 공개 (논문 출판 후)
+12.4 시스템 확장
+	•	음소 확장: MVP 3종 → 전체 한국어 자음
+	•	대상 확장: 5~7세 영유아, 13세+ 청소년, 다문화 아동
+	•	부모/치료사 대시보드 v2
+	•	on-device 추론 (ONNX + INT8 quantization)
+ㅡ END OF DESIGN DOCUMENT v0.8 ㅡ

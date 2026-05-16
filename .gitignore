@@ -1,0 +1,45 @@
+# HOPE 로컬 대용량 데이터 — Git 제외
+data/raw/**/*
+data/incoming/**/*.zip
+data/**/*.zip
+data/**/*.wav
+data/**/*.pcm
+
+# incoming / manifests 는 README·gitkeep·jsonl(소량)만 선택 추적
+!data/incoming/
+!data/incoming/**/
+!data/incoming/**/README.md
+!data/incoming/**/.gitkeep
+!data/DATA_README.txt
+!data/DATA_LAYOUT.md
+!data/manifests/
+!data/manifests/.gitkeep
+
+# Python
+.venv/
+venv/
+speech-coach/.venv/
+speech-coach/.pytest_cache/
+speech-coach/checkpoints/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 모델 가중치·체크포인트
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+outputs/
+wandb/
+.huggingface/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.log
+.cache/
